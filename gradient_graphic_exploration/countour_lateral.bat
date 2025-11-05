@@ -1,0 +1,1 @@
+ C:/Python39/python.exe "e:/MyGDrive/Universidad Nacional/UN2023-2/research/Ada next steps/3d-surface/contour_plot.py" "lateral-r492"

@@ -1,0 +1,2562 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.2" snapToGrid="false">
+  <code><![CDATA[extensions [palette]
+
+
+globals [
+  food-point-id
+  green-patches
+  initial-green-patches
+  arrival-times
+  debug-file
+  reset-color
+  ant-path-file  ; <-- ants.csv
+]
+
+
+
+
+breed [ foodys foody ]
+foodys-own [
+  food-amount
+  soy-fuente?
+]
+
+breed [ ants ant ]
+ants-own [
+  ant-difussion-rate
+  max-smell ;maximum concentration detected
+  last-arrival-time ;; last-arrival-time
+  previous-patch ;; previous patch
+]
+
+patches-own [
+  chemical                ;; amount of chemical
+  ; chemical2             ;; amount of chemical on patch 2
+  ;chemical1             ;; amount of chemical on patch 1
+  food                 ;; amount of food on this patch (0, 1, or 2)
+  nest?                ;; true on nest patches, false elsewhere
+  nest-scent           ;; number that is higher closer to the nest
+  food-source-number   ;; number (1, 2, or 3) to identify the food sources
+  sd-dist              ;; distance to nest
+
+]
+
+;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Setup procedures ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;
+
+to setup-debug
+  file-open (word movement-alg "uphill-debug.txt")
+  file-print "Tick,Agent,Patch X,Patch Y,Chemical,Surrounding Patches-(X-Y-Chemical)"
+  file-close
+end
+
+to mostrar-valores
+  ask patches [
+    set plabel-color black
+    ifelse pxcor mod 5 = 0 and pycor mod 5 = 0;(pxcor = 45 and pycor = 45) or (pxcor = -45 and pycor = -45)  ;
+      [ set plabel precision chemical 2 ]
+      [ set plabel "" ]  ; Borra la etiqueta si no es el décimo patch
+  ]
+end
+
+
+to ocultar-valores
+  ask patches [
+     set plabel ""
+  ]
+end
+
+
+to setup-experiment-bs
+  ;random-seed 42
+  clear-all
+  set-default-shape ants "bug"
+  set-default-shape foodys "square"
+  ;;create-ants population
+  ;;[ set size 2         ;; easier to see
+  ;;  set color red
+  ;;  set ant-difussion-rate diffusion-rate
+  ;;  set max-smell 0
+  ;;]   ;; red = not carrying food
+  setup-patches-bs
+  reset-ticks
+end
+
+
+to setup
+  ;random-seed 42
+  clear-all
+
+  setup-ant-path-logger ;generate ant.csv with ant route
+
+  set reset-color true
+  set-default-shape ants "bug"
+  set-default-shape foodys "square"
+  set arrival-times []
+  ;;create-ants population
+  ;;[ set size 2         ;; easier to see
+  ;;  set color red
+  ;;  set ant-difussion-rate diffusion-rate
+  ;;  set max-smell 0
+  ;;]   ;; red = not carrying food
+  setup-patches
+  reset-ticks
+end
+
+to add-ants
+  create-ants population
+  [ ;;set size 1         ;; easier to see
+    set color cyan
+    set ant-difussion-rate diffusion-rate
+    set max-smell 0
+    set last-arrival-time ticks
+  ]
+end
+
+
+
+to add-food-point ;;
+;  create-foodys 1 [
+;    set food-point-id food-point-id + 1
+;    ;setxy (food-pos-x * max-pxcor) (food-pos-y * max-pycor)
+;    ;set food-amount food-size
+;    ;set color green
+;    ;set size 1
+;
+;  ]
+  set food-point-id food-point-id + 1
+  if (distancexy (food-pos-x * max-pxcor) (food-pos-y * max-pycor)) < food-size
+    [
+      set food-source-number food-point-id
+      set food 1 ;one-of [ 1 ]
+  ]
+  recolor-patch
+end
+
+
+;to recolor-patches  ;; color patches according to heat
+;  ask patches [
+;    ifelse nest?
+;    [ set pcolor violet ]
+;    [ ifelse food > 0
+;      [ ;if food-source-number = 1 [ set pcolor cyan set chemical 60 - distancexy (0.9 * max-pxcor) 0 ]
+;        ;;if food-source-number = 1 [ set pcolor cyan ]; set chemical 10 - distancexy (0.4 * max-pxcor) (-0.4 * max-pycor) ]
+;        ;if food-source-number = 2 [ set pcolor sky  set chemical 10 - distancexy (-0.6 * max-pxcor) (-0.6 * max-pxcor) ]
+;        if food-source-number > 0 [ set pcolor green ] ; set chemical 500 - distancexy (-0.8 * max-pxcor) (0.8 * max-pxcor)]
+;      ]
+;      [set pcolor scale-color green chemical 100 0 ] ; [set pcolor palette:scale-gradient [[0 0 255] [255 0 0] ]  (chemical) 0 100 ] ;
+;    ]
+;  ]
+;end
+
+to setup-patches
+  ask patches
+  [ setup-nest
+    setup-food
+    recolor-patch
+  ]
+      ( ifelse
+      map-selection = "cross" [  set-cross ]
+      map-selection = "Xcross" [  set-cross2 ]
+      map-selection = "simetry" [ set-simetry ]
+      map-selection = "simetry-diag" [ set-simetryD ]
+      map-selection = "diagonal"  [ set-diag ]
+      map-selection = "circle"  [ set-circle ]
+      map-selection = "triangle"  [ set-polygon 3 ]
+      map-selection = "square"  [ set-polygon 4 ]
+      map-selection = "pentagon"  [ set-polygon 5 ]
+      [ set-diag ]
+    )
+end
+
+to setup-patches-bs
+  ask patches
+  [ setup-nest
+    setup-food
+    recolor-patch
+  set-simetry]
+end
+
+to setup-nest  ;; patch procedure
+  ;; set nest? variable to true inside the nest, false elsewhere
+  set nest? (distancexy 0 0) < 5
+  ;; spread a nest-scent over the whole world -- stronger near the nest
+  set nest-scent 200 - distancexy 0 0
+end
+
+to setup-food  ;; patch procedure
+  ;; setup food source one on the right
+  ;if (distancexy (0.8 * max-pxcor) 0) < 5  ;;set size and distance
+  ; [ set food-source-number 1 ]
+
+  ;; begin alt 1: 2 chemicals
+  ;; set chemical2 (200 - distancexy (-0.8 * max-pxcor) (0.8 * max-pycor)) / 200
+  ;; set chemical1 (100 - distancexy (0.4 * max-pxcor) (-0.4 * max-pycor)) / 100
+  ;; end alternative 1
+
+
+  ;; begin alt 2: 1 chemicals
+
+  ;;set chemical  chemical + (50 - (distancexy (-0.8 * max-pxcor) (-0.8 * max-pycor)))
+  ;set chemical chemical + (100 - distancexy (0.4 * max-pxcor) (0 * max-pycor)) / 200
+  ;set chemical chemical + (100 - distancexy (-0.4 * max-pxcor) (-0.4 * max-pycor)) / 200
+  ;; end alternative 1
+
+
+  ;set chemical 10 - distancexy (0.4 * max-pxcor) (-0.4 * max-pycor)
+
+;  if (distancexy (0.4 * max-pxcor) (-0.4 * max-pycor) ) < 5  ;;set size and distance
+;  [
+;    set food-source-number 1
+;
+;  ]
+  ;; setup food source two on the lower-left
+  ;if (distancexy (-0.6 * max-pxcor) (-0.6 * max-pycor)) < 7
+  ;[ set food-source-number 2 ]
+  ;; setup food source three on the upper-left
+
+   ;; setup food source three on the down-left
+  ;;if (distancexy (0.8 * max-pxcor) (-0.8 * max-pycor)) < 10
+  ;; [ set food-source-number 3 ]
+
+
+   ;; setup food source three on the upper-right
+  ;if (distancexy (0.8 * max-pxcor) (0.8 * max-pycor)) < 10
+  ; [ set food-source-number 3 ]
+
+  ;; set "food" at sources to either 1 or 2, randomly
+  if food-source-number > 0
+     [ set food one-of [ 1 ] ] ;;[ set food one-of [1 2] ]
+end
+
+to recolor-patch  ;; patch procedure
+  ;; give color to nest and food sources
+  ifelse nest?
+  [ set pcolor violet ]
+  [ ifelse food > 0
+    [
+      if food-source-number > 0 and pcolor != white [
+        set pcolor green
+      ] ; set chemical 500 - distancexy (-0.8 * max-pxcor) (0.8 * max-pxcor)]
+
+    ]
+    ;; scale color to show chemical concentration
+    [
+      ifelse debug [
+        if reset-color [set pcolor black set reset-color false ]
+      ]  [
+      set pcolor palette:scale-gradient  [ yellow red ]  (chemical) 0 100 ;;[[0 0 255] [255 0 0] ]  (chemical) min-pxcor max-pxcor ;; 2025.05.02
+      ]
+    ]
+   ]
+end
+
+;;;;;;;;;;;;;;;;;;;;;
+;;; Go procedures ;;;
+;;;;;;;;;;;;;;;;;;;;;
+
+to show-patch-chemical [p]
+  set plabel  [chemical] of p
+  set plabel-color white
+end
+
+to go  ;; forever button
+  if ticks = 0 [ set initial-green-patches sum [food] of patches with [pcolor = green]]
+
+  if release-ants-round > 0 and ticks = release-ants-round [ add-ants ]
+  set green-patches sum [food] of patches with [pcolor = green]
+  ask ants
+  [ if who >= ticks [ stop ] ;; delay initial departure
+    ifelse color = cyan
+    [ look-for-food  ]       ;; not carrying food? look for it
+    [ return-to-nest ]       ;; carrying food? take it back to nest
+    wiggle
+    fd 1
+    let current-chemical [chemical] of patch-here
+    set max-smell current-chemical
+    write-ant-path ;;write ant.csv
+  ]
+
+  ;ask foodys [ set chemical food-amount ] ;; to discuss
+
+  ;if count foodys > 0 [
+  ;  diffuse chemical diffusion-rate
+  ;]
+  ask patches with [food > 0][
+   set chemical 100
+  ]
+
+  ifelse  show-values = True  [  mostrar-valores ][ ocultar-valores ]
+
+  if block-difussion-round > 0 and ticks < block-difussion-round [ ;; block diff
+    ask patches [ ;; perform difussion and evaporation
+
+      ifelse any? neighbors [ ;; difussion
+        let promedio-vecinos (sum [chemical] of neighbors / count neighbors) ;round (sum [chemical] of neighbors / count neighbors)
+        set chemical chemical + diffusion-rate * ( promedio-vecinos - chemical )
+      ][
+        ; Aquí se aplican las condiciones de frontera
+        ; Por ejemplo, para paredes absorbentes:
+        set chemical 0
+      ]
+        ;[
+      recolor-patch
+      ;set green-patches 0
+      ;;set chemical chemical - 0.09 * (green-patches / initial-green-patches)
+      set chemical chemical * (1 - evaporation-rate) ;; slowly evaporate chemical
+    ]
+  ]
+
+
+  tick
+end
+
+
+
+to return-to-nest  ;; turtle procedure
+  ifelse nest?
+  [ ;; drop food and head out again
+    set color cyan
+    set max-smell 0
+    set last-arrival-time ticks ;;last arrival time is when ant go to nest
+    rt 180 ]
+  [ ;set chemical chemical + ant-difussion-rate  ;; drop some chemical
+    ifelse top-4-enabled [ uphill-nest-scent-random-top4 ] [ uphill-nest-scent ]
+  ]     ;; head toward the greatest value of nest-scent
+end
+
+to look-for-food  ;; turtle procedure
+  ;; current patch has food
+  if food > 0
+  [
+    set ant-difussion-rate chemical
+    set color blue      ;; pick up food
+    if  eat-food = True  [
+      set food food - 1        ;; and reduce the food source
+    ]
+    rt 180                   ;; and turn around
+    let diff-ticks ticks - last-arrival-time
+    set arrival-times lput (list who diff-ticks  pxcor pycor) arrival-times ;;add ants and tick of arrival
+    stop
+  ]
+
+  ;;  Validate if there is neighboorhood with food
+  let nearby-food one-of neighbors with [food > 0]
+  if nearby-food != nobody [
+    face nearby-food
+    fd 1
+    set ant-difussion-rate chemical
+    set color blue      ;; pick up food
+    if  eat-food = True  [
+      set food food - 1        ;; and reduce the food source
+    ]
+    rt 180                   ;; and turn around
+    let diff-ticks ticks - last-arrival-time
+    set arrival-times lput (list who diff-ticks  pxcor pycor) arrival-times ;;add ants and tick of arrival
+    stop
+  ]
+
+
+;  ask foodys with [any? ants-here with [color = red]] [
+;    set food-amount (food-amount -  1)
+;    set chemical food-amount
+;    if food-amount = 0
+;    [ die ]
+;  ]
+
+;  ask ants with [any? foodys-here] [
+;    set color blue     ;; pick up food
+;    rt 180               ;; and turn around
+;    stop
+;  ]
+
+  ;if food > 0
+  ;[
+  ;  set ant-difussion-rate chemical
+  ;  set color orange + 1     ;; pick up food
+  ;  set food food - 1        ;; and reduce the food source
+  ;  ;;set chemical chemical - ( (5 * food-size) - (distancexy (food-pos-x * max-pxcor) (food-pos-y * max-pycor)))
+  ;  rt 180                   ;; and turn around
+  ;  stop ]
+  ;; go in the direction where the chemical smell is strongest
+  ;if (chemical >= 0.05) and (chemical < 2)
+  ;[ uphill-chemical ]
+
+  ; Apply movement algorithm
+  ( ifelse
+      movement-alg = "max-smell" [ uphill-chemical ]
+      movement-alg = "ortogonal-smell" [ uphill-chemical-new ]
+      movement-alg = "uphill-chemical-radius"  [uphill-chemical-radius]
+    [ uphill-chemical ]
+  )
+
+end
+
+
+to-report get-orthogonal-coordinates [x1 y1 x2 y2 dist]
+  let d_x (x2 - x1)
+  let d_y (y2 - y1)
+  let vec_length sqrt (d_x ^ 2 + d_y ^ 2)
+
+  if vec_length = 0 [
+    user-message "Los puntos no pueden ser iguales; el vector dirección no tiene vec_length."
+    report []  ; Salida vacía si los puntos son iguales
+  ]
+
+  ; Vectores ortogonales unitarios
+  let ox-izq (- d_y / vec_length)
+  let oy-izq (d_x / vec_length)
+
+  let ox-der (d_y / vec_length)
+  let oy-der (- d_x / vec_length)
+
+  ; Redondear y crear las coordenadas como listas
+  let coords-left (list (round (x2 + ox-izq * dist)) (round (y2 + oy-izq * dist)))
+  let coords-right  (list (round (x2 + ox-der * dist)) (round (y2 + oy-der * dist)))
+
+  report (list coords-left coords-right)
+end
+
+
+to uphill-chemical-new
+
+  if debug [
+    file-open (word movement-alg "uphill-debug.txt") ;DEBUG
+  ]
+
+  let nearby-patches neighbors ; get neigbours
+
+  if any? nearby-patches [
+    ;;DEBUG
+    let current-chemical [chemical] of patch-here
+    let here_x [pxcor] of  patch-here
+    let here_y [pycor] of  patch-here
+
+    if debug [
+      ask patch here_x here_y [
+        set pcolor yellow
+      ]
+    ]
+
+    if debug [ ;; write current patch and neighbourhood info to file
+      file-print (word "Current Patch: " pxcor "," pycor " Chemical: " current-chemical) ; Print info about the current patch
+      file-print "Neighbors:"
+
+      ; Create a list to store neighbor information
+      let neighbor-info []
+      ask nearby-patches [
+        set neighbor-info lput (word pxcor "," pycor "," [chemical] of self) neighbor-info
+        set pcolor red
+      ]
+
+      ; Now, in the observer context, print the collected information
+      foreach neighbor-info [ info ->
+        file-print (word "  " info)
+      ]
+    ]
+
+    let M max-one-of nearby-patches [chemical] ;; 1. from the current position S: find the neighbour with maximum pheromone M (out of the 9 neighbours at 1 patch distance)
+    let M_x [pxcor] of M
+    let M_y [pycor] of M
+
+    if debug [
+      file-print (word "Max Patch: " M_x "," M_y " Chemical: " [chemical] of M )
+      ask patch M_x M_y
+      [
+        set pcolor white
+      ]
+    ]
+
+    let Ant_x [pxcor] of patch-here
+    let Ant_y [pycor] of patch-here
+
+
+    let ortogonales get-orthogonal-coordinates Ant_x Ant_y M_x M_y 1
+    let OM-left item 0 ortogonales
+    let OM-right item 1 ortogonales
+
+    let OM-left_x item 0 OM-left
+    let OM-left_y item 1 OM-left
+
+    let OM-right_x item 0 OM-right
+    let OM-right_y item 1 OM-right
+
+    if (OM-left_x >= min-pxcor and OM-left_x <= max-pxcor and
+      OM-left_y >= min-pycor and  OM-left_y <= max-pycor and OM-right_x >= min-pxcor and OM-right_x <= max-pxcor and
+      OM-right_y >= min-pycor and  OM-right_y <= max-pycor ) [
+
+      let patch-OM-left patch OM-left_x OM-left_y
+      let patch-OM-right patch OM-right_x OM-right_y
+      let ch-max-patch [chemical] of M
+      let ch-OM-left [chemical] of  patch-OM-left
+      let ch-OM-right [chemical] of patch-OM-right
+
+      if debug [
+        file-print(word "ch-max-patch" ch-max-patch)
+        file-print(word "ch-OM-left" ch-OM-left)
+        file-print(word "ch-OM-right" ch-OM-left)
+        file-print (word "OM-left Patch: " OM-left_x "," OM-left_y " Chemical: " [chemical] of patch-OM-left )
+        file-print (word "OM-right Patch: " OM-right_x "," OM-right_y " Chemical: " [chemical] of patch-OM-right)
+        ask patch-OM-left
+        [
+          set pcolor violet
+        ]
+        ask patch-OM-right
+        [
+          set pcolor violet
+        ]
+      ]
+
+      (ifelse
+        ch-max-patch >= ch-OM-left and ch-max-patch >= ch-OM-right [  set max-smell ch-max-patch if debug [ face M file-print(word "choice M:" M) ]]
+        ch-OM-left >= ch-OM-right and ch-OM-left >= ch-max-patch [  set max-smell ch-OM-left  face patch-OM-left if debug [file-print(word "choice OM-left:" patch-OM-left) ]]
+        ch-OM-right >= ch-OM-left and ch-OM-right >= ch-max-patch [ set max-smell ch-OM-right face patch-OM-right if debug [file-print(word "choice OM-right:" patch-OM-right) ]]
+        [ set max-smell ch-max-patch face M if debug[file-print(word "default choice M:" M) ]]
+      )
+;      if debug [
+;        print-debug-info
+;      ]
+      forward 1
+    ]
+    file-close
+  ]
+  file-close
+end
+
+
+
+to print-debug-info
+  file-open (word movement-alg "uphill-debug.txt")
+  let current-agent self
+  let current-patch patch-here
+  let current-chemical [chemical] of current-patch
+
+  let nearby-patches patches in-radius 1
+  let surrounding-patches nearby-patches with [self != current-patch]
+  let surrounding-info ""
+  ask surrounding-patches [
+    set surrounding-info (word surrounding-info "(" pxcor "-" pycor "-" [chemical] of self ") ")
+  ]
+
+  file-close
+end
+
+to uphill-chemical-radius
+
+  let current-chemical [chemical] of patch-here
+    let here_x [pxcor] of  patch-here
+    let here_y [pycor] of  patch-here
+      if debug [
+      ask patch here_x here_y [
+        set pcolor yellow
+      ]
+    ]
+
+
+  let nearby-patches patches in-radius 2 ;;identify all patches within radius 2 (24 surrounding cells)
+  let surrounding-patches nearby-patches with [self != [patch-here] of myself] ;; exclude current patch
+
+
+
+   if debug [ ;; write current patch and neighbourhood info to file
+      ;file-print (word "Current Patch: " pxcor "," pycor " Chemical: " current-chemical) ; Print info about the current patch
+      ;file-print "Neighbors:"
+
+      ; Create a list to store neighbor information
+      let neighbor-info []
+      ask nearby-patches [
+        set neighbor-info lput (word pxcor "," pycor "," [chemical] of self) neighbor-info
+        set pcolor red
+      ]
+
+      ; Now, in the observer context, print the collected information
+      ;foreach neighbor-info [ info ->
+       ; file-print (word "  " info)
+      ;]
+    ]
+
+  if any? surrounding-patches [
+    let max-chemical-patch max-one-of surrounding-patches [chemical]
+    let max-chemical-value [chemical] of max-chemical-patch
+
+    ;; If the maximum value is greater than what the and has already smelled, update and move towards it
+    if max-chemical-value > max-smell [
+      set max-smell max-chemical-value
+      face max-chemical-patch
+      if debug [
+        let M max-chemical-patch;; 1. from the current position S: find the neighbour with maximum pheromone M (out of the 9 neighbours at 1 patch distance)
+        let M_x [pxcor] of M
+        let M_y [pycor] of M
+        ;file-print (word "Max Patch: " M_x "," M_y " Chemical: " [chemical] of M )
+        ask patch M_x M_y
+        [
+          set pcolor white
+        ]
+      ]
+      forward 1
+    ]
+
+  ]
+
+end
+
+
+;; sniff left and right, and go where the strongest smell is
+to uphill-chemical  ;; turtle procedure
+;  let scent-ahead chemical-scent-at-angle   0
+;  let scent-right chemical-scent-at-angle  45
+;  let scent-left  chemical-scent-at-angle -45
+;  if (scent-right > scent-ahead) or (scent-left > scent-ahead)
+;  [ ifelse scent-right > scent-left
+;    [ rt 45 ]
+;    [ lt 45 ] ]
+; rt max-positions-chemical
+    let current-chemical [chemical] of patch-here
+    let here_x [pxcor] of  patch-here
+    let here_y [pycor] of  patch-here
+      if debug [
+      ask patch here_x here_y [
+        set pcolor yellow
+      ]
+    ]
+
+
+   if debug [ ;; write current patch and neighbourhood info to file
+      ;file-print (word "Current Patch: " pxcor "," pycor " Chemical: " current-chemical) ; Print info about the current patch
+      ;file-print "Neighbors:"
+
+      ; Create a list to store neighbor information
+      let neighbor-info []
+     let nearby-patches neighbors ; get neigbours
+      ask nearby-patches [
+        set neighbor-info lput (word pxcor "," pycor "," [chemical] of self) neighbor-info
+        set pcolor red
+      ]
+
+      ; Now, in the observer context, print the collected information
+      ;foreach neighbor-info [ info ->
+       ; file-print (word "  " info)
+      ;]
+    ]
+
+
+   if debug [
+      let nearby-patches neighbors
+     let M max-one-of nearby-patches [chemical] ;; 1. from the current position S: find the neighbour with maximum pheromone M (out of the 9 neighbours at 1 patch distance)
+    let M_x [pxcor] of M
+    let M_y [pycor] of M
+      ;file-print (word "Max Patch: " M_x "," M_y " Chemical: " [chemical] of M )
+      ask patch M_x M_y
+      [
+        set pcolor white
+      ]
+    ]
+
+
+  let max-neighbor-smell max [chemical] of neighbors
+  if max-neighbor-smell > max-smell [
+    set max-smell max-neighbor-smell
+    face one-of patches with [ chemical = max-neighbor-smell ]
+    forward 1
+  ]
+end
+
+;;; sniff left and right, and go where the strongest smell is
+;to uphill-nest-scent  ;; turtle procedure
+;  let scent-ahead nest-scent-at-angle   0
+;  let scent-right nest-scent-at-angle  45
+;  let scent-left  nest-scent-at-angle -45
+;  if (scent-right > scent-ahead) or (scent-left > scent-ahead)
+;  [ ifelse scent-right > scent-left
+;    [ rt 45 ]
+;    [ lt 45 ] ]
+;end
+to uphill-nest-scent ;; turtle procedure
+  let scent-ahead nest-scent-at-angle 0
+  let scent-right45 nest-scent-at-angle 45
+  let scent-right90 nest-scent-at-angle 90
+  let scent-right135 nest-scent-at-angle 135
+  let scent-left45 nest-scent-at-angle -45
+  let scent-left90 nest-scent-at-angle -90
+  let scent-left135 nest-scent-at-angle -135
+
+  let strongest-scent scent-ahead
+  let strongest-direction 0
+
+  if scent-right45 > strongest-scent [
+    set strongest-scent scent-right45
+    set strongest-direction 45
+  ]
+  if scent-right90 > strongest-scent [
+    set strongest-scent scent-right90
+    set strongest-direction 90
+  ]
+  if scent-right135 > strongest-scent [
+    set strongest-scent scent-right135
+    set strongest-direction 135
+  ]
+  if scent-left45 > strongest-scent [
+    set strongest-scent scent-left45
+    set strongest-direction -45
+  ]
+  if scent-left90 > strongest-scent [
+    set strongest-scent scent-left90
+    set strongest-direction -90
+  ]
+  if scent-left135 > strongest-scent [
+    set strongest-scent scent-left135
+    set strongest-direction -135
+  ]
+
+  if strongest-direction != 0 [
+    rt strongest-direction
+  ]
+end
+
+
+to uphill-nest-scent-random-top4 ;; turtle procedure
+  let scent-ahead nest-scent-at-angle 0
+  let scent-right45 nest-scent-at-angle 45
+  let scent-right90 nest-scent-at-angle 90
+  let scent-right135 nest-scent-at-angle 135
+  let scent-left45 nest-scent-at-angle -45
+  let scent-left90 nest-scent-at-angle -90
+  let scent-left135 nest-scent-at-angle -135
+
+  let scent-list []
+
+  set scent-list (list scent-ahead scent-right45 scent-right90 scent-right135 scent-left45 scent-left90 scent-left135)
+  let direction-list [0 45 90 135 -45 -90 -135]
+
+  let scent-direction-pairs (map [[a b] -> (list a b)] scent-list direction-list)
+
+  let sorted-scent-directions sort-by [ [a b] -> first a > first b ]  scent-direction-pairs
+  let top-4-scent-directions sublist sorted-scent-directions 1 4
+
+
+  let dir one-of top-4-scent-directions
+  rt item 1 dir
+end
+
+to wiggle  ;; turtle procedure
+  rt random wiggle-angle
+  lt random wiggle-angle
+  if not can-move? 1 [ rt 180 ]
+end
+
+to-report nest-scent-at-angle [angle]
+  let p patch-right-and-ahead angle 1
+  if p = nobody [ report 0 ]
+  report [nest-scent] of p
+end
+
+to-report chemical-scent-at-angle [angle]
+  let p patch-right-and-ahead angle 1
+  if p = nobody [ report 0 ]
+  report [chemical] of p
+end
+
+
+to add-f-point [ pos_x pos_y f-size ] ;;
+  ask patches [
+    set food-point-id food-point-id + 1
+    if (distancexy (pos_x * max-pxcor) (pos_y * max-pycor)) < f-size
+    [
+      set food-source-number food-point-id
+      set food 1 ;one-of [ 1 ]
+    ]
+
+    recolor-patch
+  ]
+end
+
+to set-one-point-north
+  add-f-point 0.0 1.0 10
+end
+
+to set-cross
+   add-f-point -1.0 0.0 10
+   add-f-point 0.0 -1.0 10
+   add-f-point 1.0 0.0 10
+   add-f-point 0.0 1.0 10
+end
+
+
+to set-cross2
+   add-f-point -1.0 / 2 1.0 / 2 10 / 2
+   add-f-point 1.0 / 2 -1.0 / 2 10 / 2
+   add-f-point -1.0 / 2 -1.0 / 2 10 / 2
+   add-f-point 1.0 / 2 1.0 / 2 10 / 2
+end
+
+to set-diag
+   add-f-point 0.8 0.8 10
+   add-f-point -0.5 -0.4 4
+end
+
+to set-polygon [ num-points ]
+  ; Define parameters for the circle
+  let circle-radius 0.75   ; The distance from the center (0,0)
+
+
+  ; Initialize a counter variable
+  let i 0 ; This will serve as our loop index, starting from 0
+
+  ; Use a 'while' loop to iterate a precise number of times
+  ; The loop continues as long as 'i' is less than 'num-points'
+  while [i < num-points] [
+    ; --- MODIFIED LINE FOR ANGLE CALCULATION ---
+    ; Calculate the current angle in DEGREES for this point
+    ; 360 / num-points is the angle increment per point for a full circle in degrees
+    let current-angle ( i * (360 / num-points) )
+
+    ; Optional: Add a show command to debug the angle values
+    ;show (word "Loop " i ": Angle = " current-angle)
+
+    ; Calculate x and y coordinates using trigonometry
+    ; 'cos' and 'sin' are assumed to take degrees
+    let x-coord (circle-radius * cos current-angle)
+    let y-coord (circle-radius * sin current-angle)
+
+    ;show (word "x: " x-coord ", y: " y-coord) ; Showing coordinates as well for debugging
+
+    ; Add the food point
+    add-f-point x-coord y-coord 5
+
+    ; Increment the counter for the next iteration
+    set i (i + 1)
+  ]
+end
+
+to set-circle
+  let num-points 12       ; The number of food points around the circle
+  set-polygon num-points
+end
+
+to set-simetry
+  add-f-point 0.8 0.8 5
+  add-f-point -0.8 -0.8 5
+end
+
+to set-simetryD
+  add-f-point 1 1 10
+  add-f-point -1 -1 10
+end
+
+
+to set-simetry-2
+  add-f-point 0.6 0.6 5
+  add-f-point -0.6 -0.6 5
+end
+
+
+
+to-report compare-patches [patch1 patch2]
+  if [pxcor] of patch1 < [pxcor] of patch2 [
+    report -1
+  ]
+  if [pxcor] of patch1 > [pxcor] of patch2 [
+    report 1
+  ]
+  if [pycor] of patch1 < [pycor] of patch2 [
+    report -1
+  ]
+  if [pycor] of patch1 > [pycor] of patch2 [
+    report 1
+  ]
+  report 0
+end
+
+to-report sorted-patch-variable
+   report [(list pxcor pycor chemical)] of patches with [ pxcor > -5 and pxcor < 5 and pycor > -5 and pycor < 5]
+end
+
+
+to-report average-arrival-time
+  ; Count the number of turtles with the 'ants' breed.
+  let n_ants count turtles with [breed = ants]
+
+  ; Check if there are any ants present in the model.
+  ifelse n_ants > 0 [
+    ; If there are ants, extract their arrival times.
+    ; 'arrival-times' is assumed to be a list (e.g., global or agent-owned)
+    ; where each item is a list, and the actual arrival time is at index 1
+    ; (the second element) of that inner list.
+    let times map [arrival -> item 1 arrival] arrival-times
+
+    ; *** ROBUSTNESS / CLARITY CHECK ***
+    ; Even though NetLogo's `mean` primitive reports 0 for an empty list,
+    ; this explicit check makes the desired behavior clear:
+    ; if there are no recorded arrival times, the average is 0.
+    ifelse empty? times [
+      ; If the list of times is empty, report 0 as the average.
+      report 0
+    ] [
+      ; If there are times in the list, calculate and report their mean.
+      report mean times
+    ]
+  ][
+    ; If there are no ants at all, report 0 for the average.
+    report 0
+  ]
+end
+
+to-report std-arrival-time
+  let n_ants count turtles with [breed = ants]
+
+  ifelse n_ants > 0 [
+    let times map [arrival -> item 1 arrival] arrival-times
+
+    ; *** NEW: Check the size of 'times' before calculating standard-deviation ***
+    ifelse length times >= 2 [
+      report standard-deviation times
+    ] [
+      ; If there are 0 or 1 times, standard deviation is undefined or trivially 0.
+      ; Reporting 0 is a common and sensible default in such cases.
+      report 0
+    ]
+  ][
+    ; If no ants, report 0
+    report 0
+  ]
+end
+
+to export-arrival-times-csv
+  let n_ants  count turtles with [breed = ants]
+  file-open (word movement-alg "arrival-times-" block-difussion-round "-nants-" n_ants "-map-" map-selection ".csv")
+  file-print "ant,time,x,y" ; Encabezados de columna
+  foreach arrival-times [
+    arrival -> file-print (word item 0 arrival "," item 1 arrival "," item 2 arrival "," item 3 arrival)
+  ]
+  file-close
+end
+
+
+to export-patch-info [  ]
+  let n_ants  count turtles with [breed = ants]
+  file-open (word movement-alg "export-patch-info-" block-difussion-round "-nants-" n_ants "-map-" map-selection ".csv")
+  file-print "ant,time,x,y" ; Encabezados de columna
+  foreach arrival-times [
+    arrival -> file-print (word item 0 arrival "," item 1 arrival "," item 2 arrival "," item 3 arrival)
+  ]
+  file-close
+end
+
+
+to export-consolidated-info [  ]
+  let n_ants  count turtles with [breed = ants]
+  file-open (word movement-alg "-consolidated-block-r-" block-difussion-round "-nants-" n_ants "-map-" map-selection ".csv")
+  file-print(word average-arrival-time "," std-arrival-time)
+  ;file-print "ant,time,x,y" ; Encabezados de columna
+  ;foreach arrival-times [
+  ;  arrival -> file-print (word item 0 arrival "," item 1 arrival "," item 2 arrival "," item 3 arrival)
+  ;]
+  file-close
+end
+
+
+; --- CÓDIGO AÑADIDO PARA EXPORTAR LA RUTA DE LA HORMIGA (0,0) ---
+
+to setup-ant-path-logger
+  ; Cierra cualquier archivo que haya quedado abierto de un run anterior
+  file-close-all
+
+  ; Guarda el nombre del archivo en la variable global
+  set ant-path-file "ant_path.csv"
+
+  ; Borra el archivo viejo si existe
+  ;if (file-exists? ant-path-file) [
+  ;  file-delete ant-path-file
+  ;]
+
+  ; Abre el nuevo archivo (¡Y LO DEJA ABIERTO!)
+  file-open ant-path-file
+
+  ; Imprime el encabezado
+  file-print "x,y"
+end
+
+to write-ant-path
+  ; 'self' es la hormiga que está ejecutando
+  ; Simplemente escribe en el archivo que ya está abierto
+  file-open ant-path-file
+  file-print (word pxcor "," pycor)
+end
+
+; Copyright 1997 Uri Wilensky.
+; See Info tab for full copyright and license.]]></code>
+  <widgets>
+    <view x="237" wrappingAllowedX="false" y="11" frameRate="30.0" minPycor="-100" height="511" showTickCounter="true" patchSize="2.5" fontSize="8" wrappingAllowedY="false" width="510" tickCounterLabel="ticks" maxPycor="100" updateMode="1" maxPxcor="100" minPxcor="-100"></view>
+    <button x="36" y="143" height="33" disableUntilTicks="false" forever="false" kind="Observer" width="61" sizeVersion="0">setup</button>
+    <slider x="31" step="0.05" y="31" max="1" display="diffusion-rate" height="33" min="0.0" direction="Horizontal" default="1.0" variable="diffusion-rate" width="190" sizeVersion="0"></slider>
+    <slider x="32" step="0.01" y="68" max="1" display="evaporation-rate" height="33" min="0.0" direction="Horizontal" default="0.0" variable="evaporation-rate" width="190" sizeVersion="0"></slider>
+    <button x="99" y="143" height="33" disableUntilTicks="true" forever="true" kind="Observer" width="58" sizeVersion="0">go</button>
+    <slider x="32" step="1.0" y="104" max="100" display="population" height="33" min="0.0" direction="Horizontal" default="1.0" variable="population" width="190" sizeVersion="0"></slider>
+    <slider x="767" step="1" y="56" max="10" display="food-size" height="33" min="0" direction="Horizontal" default="6.0" variable="food-size" width="172" sizeVersion="0"></slider>
+    <slider x="768" step="0.1" y="91" max="1" display="food-pos-x" height="33" min="-1" direction="Horizontal" default="-0.5" variable="food-pos-x" width="172" sizeVersion="0"></slider>
+    <button x="768" y="162" height="33" disableUntilTicks="false" forever="false" kind="Patch" width="114" sizeVersion="0">add-food-point</button>
+    <slider x="768" step="0.1" y="126" max="1" display="food-pos-y" height="33" min="-1" direction="Horizontal" default="-0.5" variable="food-pos-y" width="172" sizeVersion="0"></slider>
+    <switch x="768" y="21" height="33" on="false" variable="show-values" display="show-values" width="125" sizeVersion="0"></switch>
+    <button x="128" actionKey="S" y="181" height="33" disableUntilTicks="false" forever="false" kind="Observer" display="step" width="63" sizeVersion="0">go</button>
+    <button x="772" y="197" height="33" disableUntilTicks="false" forever="false" kind="Patch" display="set-simetry-2" width="105" sizeVersion="0">set-simetry-2
+</button>
+    <switch x="947" y="87" height="33" on="false" variable="top-4-enabled" display="top-4-enabled" width="134" sizeVersion="0"></switch>
+    <button x="36" y="180" height="33" disableUntilTicks="false" forever="false" kind="Observer" width="81" sizeVersion="0">add-ants</button>
+    <monitor x="37" precision="17" y="238" height="45" fontSize="11" width="126" sizeVersion="0">average-arrival-time</monitor>
+    <plot x="771" autoPlotX="true" yMax="10.0" autoPlotY="true" y="319" xMin="0.0" height="150" legend="false" xMax="10.0" yMin="0.0" display="Average arrival time" width="200" sizeVersion="0">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="default" color="-10022847" legend="true">
+        <setup></setup>
+        <update>plot average-arrival-time</update>
+      </pen>
+      <pen interval="1.0" mode="0" display="pen-1" color="-15390905" legend="true">
+        <setup></setup>
+        <update>plot std-arrival-time + average-arrival-time</update>
+      </pen>
+      <pen interval="1.0" mode="0" display="pen-2" color="-15390905" legend="true">
+        <setup></setup>
+        <update>plot average-arrival-time - std-arrival-time</update>
+      </pen>
+    </plot>
+    <monitor x="37" precision="17" y="285" height="45" fontSize="11" width="123" sizeVersion="0">std-arrival-time</monitor>
+    <switch x="946" y="124" height="33" on="false" variable="eat-food" display="eat-food" width="104" sizeVersion="0"></switch>
+    <input x="1015" multiline="false" y="208" height="60" variable="release-ants-round" type="number" width="155" sizeVersion="0">1200.0</input>
+    <button x="882" y="163" height="33" disableUntilTicks="false" forever="false" kind="Patch" display="set-one-point-north" width="141" sizeVersion="0">set-one-point-north</button>
+    <chooser x="947" y="40" height="45" variable="movement-alg" current="1" display="movement-alg" width="165" sizeVersion="0">
+      <choice type="string" value="max-smell"></choice>
+      <choice type="string" value="ortogonal-smell"></choice>
+      <choice type="string" value="uphill-chemical-radius"></choice>
+    </chooser>
+    <switch x="1084" y="89" height="33" on="true" variable="debug" display="debug" width="103" sizeVersion="0"></switch>
+    <input x="1015" multiline="false" y="270" height="60" variable="block-difussion-round" type="number" width="155" sizeVersion="0">1200.0</input>
+    <chooser x="1068" y="138" height="45" variable="map-selection" current="0" display="map-selection" width="138" sizeVersion="0">
+      <choice type="string" value="cross"></choice>
+      <choice type="string" value="Xcross"></choice>
+      <choice type="string" value="simetry"></choice>
+      <choice type="string" value="simetry-diag"></choice>
+      <choice type="string" value="diag"></choice>
+      <choice type="string" value="circle"></choice>
+      <choice type="string" value="triangle"></choice>
+      <choice type="string" value="square"></choice>
+      <choice type="string" value="pentagon"></choice>
+    </chooser>
+    <slider x="770" step="1" y="233" max="50" display="wiggle-angle" height="33" min="0" direction="Horizontal" default="40.0" variable="wiggle-angle" width="172" sizeVersion="0"></slider>
+  </widgets>
+  <info><![CDATA[## WHAT IS IT?
+
+In this project, a colony of ants forages for food. Though each ant follows a set of simple rules, the colony as a whole acts in a sophisticated way.
+
+## HOW IT WORKS
+
+When an ant finds a piece of food, it carries the food back to the nest, dropping a chemical as it moves. When other ants "sniff" the chemical, they follow the chemical toward the food. As more ants carry food to the nest, they reinforce the chemical trail.
+
+## HOW TO USE IT
+
+Click the SETUP button to set up the ant nest (in violet, at center) and three piles of food. Click the GO button to start the simulation. The chemical is shown in a green-to-white gradient.
+
+The EVAPORATION-RATE slider controls the evaporation rate of the chemical. The DIFFUSION-RATE slider controls the diffusion rate of the chemical.
+
+If you want to change the number of ants, move the POPULATION slider before pressing SETUP.
+
+## THINGS TO NOTICE
+
+The ant colony generally exploits the food source in order, starting with the food closest to the nest, and finishing with the food most distant from the nest. It is more difficult for the ants to form a stable trail to the more distant food, since the chemical trail has more time to evaporate and diffuse before being reinforced.
+
+Once the colony finishes collecting the closest food, the chemical trail to that food naturally disappears, freeing up ants to help collect the other food sources. The more distant food sources require a larger "critical number" of ants to form a stable trail.
+
+The consumption of the food is shown in a plot.  The line colors in the plot match the colors of the food piles.
+
+## EXTENDING THE MODEL
+
+Try different placements for the food sources. What happens if two food sources are equidistant from the nest? When that happens in the real world, ant colonies typically exploit one source then the other (not at the same time).
+
+In this project, the ants use a "trick" to find their way back to the nest: they follow the "nest scent." Real ants use a variety of different approaches to find their way back to the nest. Try to implement some alternative strategies.
+
+The ants only respond to chemical levels between 0.05 and 2.  The lower limit is used so the ants aren't infinitely sensitive.  Try removing the upper limit.  What happens?  Why?
+
+In the `uphill-chemical` procedure, the ant "follows the gradient" of the chemical. That is, it "sniffs" in three directions, then turns in the direction where the chemical is strongest. You might want to try variants of the `uphill-chemical` procedure, changing the number and placement of "ant sniffs."
+
+## NETLOGO FEATURES
+
+The built-in `diffuse` primitive lets us diffuse the chemical easily without complicated code.
+
+The primitive `patch-right-and-ahead` is used to make the ants smell in different directions without actually turning.
+
+## HOW TO CITE
+
+If you mention this model or the NetLogo software in a publication, we ask that you include the citations below.
+
+For the model itself:
+
+* Wilensky, U. (1997).  NetLogo Ants model.  http://ccl.northwestern.edu/netlogo/models/Ants.  Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
+
+Please cite the NetLogo software as:
+
+* Wilensky, U. (1999). NetLogo. http://ccl.northwestern.edu/netlogo/. Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
+
+## COPYRIGHT AND LICENSE
+
+Copyright 1997 Uri Wilensky.
+
+![CC BY-NC-SA 3.0](http://ccl.northwestern.edu/images/creativecommons/byncsa.png)
+
+This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 3.0 License.  To view a copy of this license, visit https://creativecommons.org/licenses/by-nc-sa/3.0/ or send a letter to Creative Commons, 559 Nathan Abbott Way, Stanford, California 94305, USA.
+
+Commercial licenses are also available. To inquire about commercial licenses, please contact Uri Wilensky at uri@northwestern.edu.
+
+This model was created as part of the project: CONNECTED MATHEMATICS: MAKING SENSE OF COMPLEX PHENOMENA THROUGH BUILDING OBJECT-BASED PARALLEL MODELS (OBPML).  The project gratefully acknowledges the support of the National Science Foundation (Applications of Advanced Technologies Program) -- grant numbers RED #9552950 and REC #9632612.
+
+This model was developed at the MIT Media Lab using CM StarLogo.  See Resnick, M. (1994) "Turtles, Termites and Traffic Jams: Explorations in Massively Parallel Microworlds."  Cambridge, MA: MIT Press.  Adapted to StarLogoT, 1997, as part of the Connected Mathematics Project.
+
+This model was converted to NetLogo as part of the projects: PARTICIPATORY SIMULATIONS: NETWORK-BASED DESIGN FOR SYSTEMS LEARNING IN CLASSROOMS and/or INTEGRATED SIMULATION AND MODELING ENVIRONMENT. The project gratefully acknowledges the support of the National Science Foundation (REPP & ROLE programs) -- grant numbers REC #9814682 and REC-0126227. Converted from StarLogoT to NetLogo, 1998.
+
+<!-- 1997 1998 MIT -->]]></info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+  <experiments>
+    <experiment name="experiment" repetitions="30" sequentialRunOrder="false" runMetricsEveryStep="true" timeLimit="50">
+      <setup>setup-experiment-bs</setup>
+      <go>go</go>
+      <metrics>
+        <metric>sorted-patch-variable</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="cross-r200-ants30-ortogonal-smell" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>average-arrival-time</metric>
+        <metric>std-arrival-time</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;ortogonal-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle_angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="experiment (1)" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;ortogonal-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="simetry-r200-ants30-radius-2-W5" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;uphill-chemical-radius&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;simetry&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="cross-r200-ants30-max-smell" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;max-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="cross-r1000-ants30-ortogonal-smell" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="2000">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>average-arrival-time</metric>
+        <metric>std-arrival-time</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="1000"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;ortogonal-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="1000"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="cross-r1000-ants30-radius-2" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="2000">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="1000"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;uphill-chemical-radius&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="1000"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="circle-r200-ants30-radius2" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;ortogonal-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;circle&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="circle-r200-ants30-max-smell" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;max-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;circle&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="cross-r200-ants30-radius-2w5" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;uphill-chemical-radius&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="cross-r200-ants30-ortogonal-smell-W0" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>average-arrival-time</metric>
+        <metric>std-arrival-time</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;ortogonal-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;cross&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="0"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="simetry-r200-ants30-max-smell-wiggle-5" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;max-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;simetry&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="simetry-r200-ants30-radius-2-W5 (1)" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>count turtles</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;uphill-chemical-radius&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;simetry&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+    <experiment name="simetry-r200-ants30-ortogonal-smell-wiggle5" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="true" timeLimit="1200">
+      <setup>setup</setup>
+      <go>go</go>
+      <postRun>export-consolidated-info
+export-arrival-times-csv</postRun>
+      <metrics>
+        <metric>average-arrival-time</metric>
+        <metric>std-arrival-time</metric>
+      </metrics>
+      <constants>
+        <enumeratedValueSet variable="food-pos-y">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="release-ants-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="population">
+          <value value="30"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="diffusion-rate">
+          <value value="1"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="evaporation-rate">
+          <value value="0"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="movement-alg">
+          <value value="&quot;ortogonal-smell&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="top-4-enabled">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="debug">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-pos-x">
+          <value value="-0.5"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="map-selection">
+          <value value="&quot;simetry&quot;"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="food-size">
+          <value value="6"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="eat-food">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="show-values">
+          <value value="false"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="block-difussion-round">
+          <value value="200"></value>
+        </enumeratedValueSet>
+        <enumeratedValueSet variable="wiggle-angle">
+          <value value="5"></value>
+        </enumeratedValueSet>
+      </constants>
+    </experiment>
+  </experiments>
+</model>
